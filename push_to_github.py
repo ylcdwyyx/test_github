@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""使用 PAT 一键创建 GitHub 仓库并推送当前项目。"""
+"""使用 PAT 一键创建 GitHub 仓库并推送指定项目。"""
 import argparse
 import json
 import os
@@ -62,8 +62,9 @@ def set_remote(root, remote_name, remote_url):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="创建 GitHub 仓库并推送当前项目")
-    parser.add_argument("repo", help="目标仓库名")
+    parser = argparse.ArgumentParser(description="创建 GitHub 仓库并推送指定项目")
+    parser.add_argument("repo", nargs="?", help="目标仓库名（缺省时取项目目录名）")
+    parser.add_argument("--path", help="项目根路径，默认当前目录", default=None)
     parser.add_argument("--owner", help="GitHub 用户名/组织名，若创建成功将自动从返回值读取")
     parser.add_argument("--branch", default="main", help="推送分支，默认 main")
     parser.add_argument("--remote-name", default="origin", help="远程名，默认 origin")
@@ -73,7 +74,9 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="仅打印计划操作，不实际推送")
     args = parser.parse_args()
 
-    root = Path(__file__).resolve().parent
+    root = Path(args.path).resolve() if args.path else Path.cwd()
+    repo_name = args.repo or root.name
+
     token = os.environ.get("GITHUB_TOKEN")
     if not token:
         raise RuntimeError("未检测到 GITHUB_TOKEN，请先导出 PAT：setx GITHUB_TOKEN <token>")
@@ -83,7 +86,7 @@ def main():
 
     repo_info = None
     if not args.skip_create:
-        repo_info = create_repo(token, args.repo, args.private, args.description)
+        repo_info = create_repo(token, repo_name, args.private, args.description)
 
     owner = args.owner
     if repo_info:
@@ -93,7 +96,7 @@ def main():
         if not owner:
             raise RuntimeError("未提供 owner 且未从创建结果中获取到 owner，无法拼接远程地址。")
         visibility_prefix = ""  # https 方式无需可见性前缀
-        remote_url = f"https://github.com/{owner}/{args.repo}.git"
+        remote_url = f"https://github.com/{owner}/{repo_name}.git"
 
     set_remote(root, args.remote_name, remote_url)
 
