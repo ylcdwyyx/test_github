@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import getpass
 from pathlib import Path
 
 import requests
@@ -29,6 +30,69 @@ def ensure_clean_tree(root):
     status = run_cmd(["git", "status", "--porcelain"], root)
     if status:
         raise RuntimeError("工作区存在未提交改动，请先提交后再运行脚本。")
+
+def try_load_shared_env():
+    """尝试加载共享 .env（如果你的环境中配置了 env_loader）。"""
+    try:
+        from env_loader import load_env  # type: ignore
+
+        load_env()
+        return True
+    except Exception:
+        return False
+
+
+def try_get_token_from_gh():
+    """尝试从 GitHub CLI 获取当前登录的 token（如果安装了 gh 且已登录）。"""
+    try:
+        result = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True)
+        if result.returncode != 0:
+            return None
+        token = (result.stdout or "").strip()
+        return token or None
+    except Exception:
+        return None
+
+
+def get_github_token(allow_prompt):
+    """获取 GitHub PAT，优先环境变量，其次共享 .env，其次 gh，最后可交互提示。"""
+    token = (os.environ.get("GITHUB_TOKEN") or "").strip()
+    if token:
+        return token
+
+    try_load_shared_env()
+    token = (os.environ.get("GITHUB_TOKEN") or "").strip()
+    if token:
+        return token
+
+    token = try_get_token_from_gh()
+    if token:
+        os.environ["GITHUB_TOKEN"] = token
+        return token
+
+    if allow_prompt and sys.stdin.isatty():
+        token = (getpass.getpass("请输入 GitHub PAT（不会回显）：") or "").strip()
+        if token:
+            os.environ["GITHUB_TOKEN"] = token
+            return token
+
+    raise RuntimeError("未检测到 GITHUB_TOKEN，请先导出 PAT：setx GITHUB_TOKEN <token>（必要时重启资源管理器）")
+
+
+def get_authed_login(token):
+    """通过 GitHub API 获取当前 token 对应的用户名。"""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    resp = requests.get("https://api.github.com/user", headers=headers, timeout=15)
+    if resp.status_code != 200:
+        raise RuntimeError(f"获取当前用户信息失败，状态码 {resp.status_code}: {resp.text}")
+    data = resp.json()
+    login = (data.get("login") or "").strip()
+    if not login:
+        raise RuntimeError("获取当前用户信息失败：返回缺少 login")
+    return login
 
 
 def create_repo(token, name, private, description):
@@ -72,14 +136,15 @@ def main():
     parser.add_argument("--description", help="仓库描述")
     parser.add_argument("--skip-create", action="store_true", help="跳过创建仓库，仅设置远程并推送")
     parser.add_argument("--dry-run", action="store_true", help="仅打印计划操作，不实际推送")
+    parser.add_argument("--no-prompt-token", action="store_true", help="缺少 token 时不提示输入（直接报错）")
     args = parser.parse_args()
 
     root = Path(args.path).resolve() if args.path else Path.cwd()
     repo_name = args.repo or root.name
 
-    token = os.environ.get("GITHUB_TOKEN")
-    if not token:
-        raise RuntimeError("未检测到 GITHUB_TOKEN，请先导出 PAT：setx GITHUB_TOKEN <token>")
+    token = None
+    if not args.skip_create:
+        token = get_github_token(allow_prompt=(not args.no_prompt_token))
 
     ensure_git_repo(root)
     ensure_clean_tree(root)
@@ -93,6 +158,8 @@ def main():
         owner = repo_info.get("owner", {}).get("login", owner)
         remote_url = repo_info.get("clone_url")
     else:
+        if not owner and token:
+            owner = get_authed_login(token)
         if not owner:
             raise RuntimeError("未提供 owner 且未从创建结果中获取到 owner，无法拼接远程地址。")
         visibility_prefix = ""  # https 方式无需可见性前缀
