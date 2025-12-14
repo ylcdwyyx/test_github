@@ -144,16 +144,30 @@ def main():
 
     token = None
     if not args.skip_create:
-        token = get_github_token(allow_prompt=(not args.no_prompt_token))
+        need_token = (not args.dry_run) or (args.owner is None)
+        if need_token:
+            token = get_github_token(allow_prompt=(not args.no_prompt_token))
 
     ensure_git_repo(root)
+
+    owner = args.owner
+    if args.dry_run:
+        if not owner and token:
+            owner = get_authed_login(token)
+        if not owner:
+            raise RuntimeError("dry-run 模式下需要提供 --owner，或提供 GITHUB_TOKEN 以自动获取用户名。")
+        remote_url = f"https://github.com/{owner}/{repo_name}.git"
+        print(f"计划推送到 {remote_url} 分支 {args.branch}，远程名 {args.remote_name}（dry-run 不会创建仓库/修改远程/推送）")
+        return
+
     ensure_clean_tree(root)
 
     repo_info = None
     if not args.skip_create:
+        if not token:
+            token = get_github_token(allow_prompt=(not args.no_prompt_token))
         repo_info = create_repo(token, repo_name, args.private, args.description)
 
-    owner = args.owner
     if repo_info:
         owner = repo_info.get("owner", {}).get("login", owner)
         remote_url = repo_info.get("clone_url")
@@ -162,14 +176,9 @@ def main():
             owner = get_authed_login(token)
         if not owner:
             raise RuntimeError("未提供 owner 且未从创建结果中获取到 owner，无法拼接远程地址。")
-        visibility_prefix = ""  # https 方式无需可见性前缀
         remote_url = f"https://github.com/{owner}/{repo_name}.git"
 
     set_remote(root, args.remote_name, remote_url)
-
-    if args.dry_run:
-        print(f"计划推送到 {remote_url} 分支 {args.branch}，远程名 {args.remote_name}，跳过实际推送")
-        return
 
     run_cmd(["git", "push", "-u", args.remote_name, args.branch], root)
     print(f"推送完成：{remote_url} -> {args.branch}")
