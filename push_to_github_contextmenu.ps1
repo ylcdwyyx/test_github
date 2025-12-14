@@ -60,9 +60,10 @@ try {
         try { git symbolic-ref HEAD refs/heads/main | Out-Null } catch { }
     }
 
-    # 切换到项目内日志（放在 .git 内，避免污染工作区）
+    # 切换到项目内日志（放在 .git 内，避免污染工作区；每次生成新文件，避免打开日志导致文件锁定）
     try {
-        $projectLogPath = Join-Path (Join-Path $projectPath ".git") "push_to_github.log"
+        $ts = Get-Date -Format "yyyyMMdd_HHmmss"
+        $projectLogPath = Join-Path (Join-Path $projectPath ".git") ("push_to_github_" + $ts + ".log")
         if ($logPath -ne $projectLogPath) {
             if (Test-Path -LiteralPath $logPath) {
                 Get-Content -LiteralPath $logPath | Set-Content -LiteralPath $projectLogPath -Encoding UTF8
